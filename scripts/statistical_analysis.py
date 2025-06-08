@@ -30,33 +30,33 @@ for m, w in wide.items():
             continue
 
         diff = paired[v] - paired['orig']
-        normal = True
+        normal = stats.shapiro(diff)[1] >= ALPHA
 
         if normal:
             stat, p = stats.ttest_rel(paired[v], paired['orig'])
             test = 'paired-t'
-            effect = diff.mean() / diff.std(ddof=1)
+            point = diff.mean()
+            boots  = np.random.choice(diff, (BOOT_N, diff.size),
+                replace=True).mean(axis=1)
         else:
-            stat, p = stats.wilcoxon(paired[v], paired['orig'])
+            stat, p = stats.wilcoxon(diff)
             test = 'Wilcoxon'
-            n_pos, n_neg = (diff > 0).sum(), (diff < 0).sum()
-            effect = (n_pos - n_neg) / (n_pos + n_neg)
+            point = np.median(diff)
+            boots = np.median(np.random.choice(diff, (BOOT_N, diff.size), replace=True), axis=1)
 
-        # BCa bootstrap CI for mean diff
-        boots = np.random.choice(diff, (BOOT_N, diff.size), replace=True).mean(axis=1)
+        # bootstrap CI for mean diff
         ci_low, ci_high = np.percentile(boots, [2.5, 97.5])
 
-        rows.append([m, f'{v} vs orig', test, stat, p, effect, ci_low, ci_high])
+        rows.append([m, f'{v} vs orig', test, point, p])
 
 results = pd.DataFrame(rows,
-                       columns=['metric', 'comparison', 'test',
-                                'statistic', 'p_value', 'effect',
-                                'ci_low', 'ci_high'])
+                       columns=['metric', 'comparison', 'test', 'point_estimate',
+                                'p_value'])
 
 # 2. print tidy results
 pd.set_option('display.max_rows', None, 'display.max_columns', None)
 print('\n=== Paired-test results (n=301 queries) ===\n')
-print(results.round(4).to_string(index=False))
+print(results.round(6).to_string(index=False))
 
 # 3. violin plots for readability metrics
 for m in ['dale_chall', 'fkgl', 'coleman_liau']:
@@ -210,3 +210,45 @@ def hist_grid(csv_path,
 # ------------------ usage ------------------
 hist_grid("query_metrics.csv")
 
+# Checking for each metrics, how many were absolute zero differences.
+def count_exact_ties(csv_path: str,
+                     metrics=('dale_chall', 'fkgl', 'coleman_liau',
+                              'toxicity', 'profanity', 'threat', 'insult'),
+                     variants=('full', 'r1', 'r2', 'r3')):
+    """
+    Print, for each metric/variant pair, the number and percentage of
+    exact ties (i.e., diff == 0 between variant and 'orig').
+
+    Returns
+    -------
+    pd.DataFrame
+        Columns: metric, variant, n_same, n_total, percent
+    """
+    df = pd.read_csv(csv_path)
+
+    # wide-form dict as in your main script
+    wide = {m: df.pivot(index='index', columns='variant', values=m)
+            for m in metrics}
+
+    rows = []
+    for metric, w in wide.items():
+        for v in variants:
+            paired = w[['orig', v]].dropna()
+            diff   = paired[v] - paired['orig']
+            n_same = (diff == 0).sum()
+            n_tot  = len(diff)
+            pct    = 100 * n_same / n_tot if n_tot else float('nan')
+            rows.append([metric, v, n_same, n_tot, pct])
+
+    ties = (pd.DataFrame(rows,
+                         columns=['metric', 'variant',
+                                  'n_same', 'n_total', 'percent'])
+              .sort_values(['metric', 'variant']))
+
+    # pretty print
+    print("\n=== Exact-tie counts (variant vs. orig) ===")
+    print(ties.to_string(index=False,
+                         formatters={'percent': '{:.1f}%'.format}))
+    return ties
+
+count_exact_ties("query_metrics.csv")
