@@ -3,6 +3,7 @@ import numpy as np
 from scipy import stats
 import matplotlib.pyplot as plt
 import seaborn as sns
+import re, ast 
 
 # parameters
 CSV_PATH = 'query_metrics.csv'  
@@ -252,3 +253,72 @@ def count_exact_ties(csv_path: str,
     return ties
 
 count_exact_ties("query_metrics.csv")
+
+
+# 6. Analysis of r1 and r2 ablations after removing the cases where the queries did not change. 
+METRICS   = ['dale_chall', 'fkgl', 'coleman_liau',
+             'toxicity', 'profanity', 'threat', 'insult']
+VARIANTS  = ['r1', 'r2']
+
+# ---------- helpers ----------
+def normalise(q: str) -> str:
+    """Lower-case + collapse whitespace + strip trailing ?!. for comparison."""
+    q = q.lower().strip()
+    q = re.sub(r"\s+", " ", q)
+    return q.rstrip("?!.")
+
+def wilcoxon_or_skip(arr):
+    """Safely run Wilcoxon signed-rank; return (median, p)."""
+    if (arr == 0).all():
+        return np.median(arr), np.nan     # no variation
+    stat, p = stats.wilcoxon(arr)
+    return np.median(arr), p
+
+# make sure snippets column is parsed into a list
+df["snippets_parsed"] = df["snippets"].apply(ast.literal_eval)
+
+for v in VARIANTS:
+    diffs_by_metric   = {m: [] for m in METRICS}
+    n_total           = 0     # filtered queries (query text changed)
+    n_identical_snips = 0     # snippet sets still identical
+
+    # iterate per original query id
+    for qid, grp in df.groupby("index"):
+        try:
+            orig_row = grp.loc[grp["variant"] == "orig"].iloc[0]
+            var_row  = grp.loc[grp["variant"] == v   ].iloc[0]
+        except IndexError:
+            continue  # variant missing
+
+        # keep only queries whose text differs
+        if normalise(orig_row["query"]) == normalise(var_row["query"]):
+            continue
+
+        n_total += 1
+
+        # snippet-set comparison
+        same_snips = set(orig_row["snippets_parsed"]) == set(var_row["snippets_parsed"])
+        if same_snips:
+            n_identical_snips += 1
+
+        # collect metric deltas
+        for m in METRICS:
+            diffs_by_metric[m].append(var_row[m] - orig_row[m])
+
+    pct_same = (n_identical_snips / n_total * 100) if n_total else float("nan")
+    print(f"\n===== {v.upper()} =====")
+    print(f"Queries with changed text: {n_total}")
+    print(f"→ {pct_same:.1f}% still returned an identical snippet set\n")
+
+    header = f"{'metric':15} {'n':>5} {'median_delta':>10} {'p_value':>12}"
+    print(header)
+    print("-" * len(header))
+
+    for m, diffs in diffs_by_metric.items():
+        diffs = np.asarray(diffs, dtype=float)
+        if diffs.size < 2:
+            print(f"{m:15} {diffs.size:5} {'NA':>10} {'NA':>12}")
+            continue
+
+        median_delta, p_val = wilcoxon_or_skip(diffs)
+        print(f"{m:15} {diffs.size:5} {median_delta:10.4f} {p_val:12.6f}")
