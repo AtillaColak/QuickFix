@@ -1,4 +1,6 @@
 This repository contains the code, datasets, and graphs created and developed for my bachelor's thesis project: <b>Quickfix, A multistep children online search query reformulation method using LLM</b>
+The paper is available [here](https://resolver.tudelft.nl/uuid:8a8315a1-cccc-4115-baa1-bf8633983f40).
+
 
 # Repository Description 
 Below are the three main folders in our repository and their description. 
